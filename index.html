@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width,user-scalable=no">
+
+    <meta name="viewport" content="initial-scale=1, maximum-scale=1,user-scalable=no">
+    <title>geometry-inspector</title>
+
+    <!-- bootstrap -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.0/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-gH2yIJqKdNHPEq0n4Mqa/HGKIhSkIHeL5AyhkYV8i59U5AR6csBvApHHNl/vI1Bx" crossorigin="anonymous">
+
+    <!-- arcgis -->
+    <link
+      rel="stylesheet"
+      href="https://js.arcgis.com/4.24/esri/themes/light/main.css"/>
+    <script src="https://js.arcgis.com/4.24/"></script>
+    <style>
+      html, body, #mainWindow {
+        font-family: sans-serif;
+        height: 100%;
+        width: 100%;
+      }
+      html, body {
+        margin: 0;
+        padding: 0;
+      }
+      #map {
+        height: 100%;
+      }
+      #map_zoom_slider {
+        top: 20px;
+        right: 20px;
+        left: auto;
+      }
+      #info-panel {
+        top: 0;
+        left: 0;
+        width: 350px;
+        height: 100%;
+        text-align:center;
+      }
+      #geometry-container {
+        overflow: hidden;
+      }
+      .btn {
+        margin: 3px;
+      }
+      .geometry-text {
+        font-size: 90%;
+        resize: vertical;
+      }
+    </style>
+    <script type='module'>
+      import { wktToGeoJSON, geojsonToWKT } from 'https://unpkg.com/@terraformer/wkt?module';
+      import { arcgisToGeoJSON, geojsonToArcGIS } from 'https://unpkg.com/@terraformer/arcgis?module';
+
+      let draw, currentDrawActionName, currentDrawAction;
+
+      require([
+        "esri/Map",
+        "esri/views/MapView",
+        "esri/Basemap",
+        "esri/layers/WebTileLayer",
+        "esri/views/draw/Draw",
+        "esri/Graphic",
+        "esri/geometry/support/jsonUtils",
+        "esri/geometry/support/webMercatorUtils",
+
+        "esri/geometry/Point",
+        "esri/geometry/Multipoint",
+        "esri/geometry/Polyline",
+        "esri/geometry/Polygon"
+      ], function(
+        Map, MapView, Basemap, WebTileLayer, Draw, Graphic, jsonUtils, WebMercatorUtils,
+        Point, Multipoint, Polyline, Polygon
+      ) {
+ 
+        const mapBaseLayer = new WebTileLayer({
+          urlTemplate: "http://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        });
+
+        const eSat = new Basemap({
+          baseLayers: [mapBaseLayer],
+          title: "ESat",
+          id: "esat",
+          thumbnailUrl: "https://stamen-tiles.a.ssl.fastly.net/terrain/10/177/409.png"
+        });
+
+        const map = new Map({
+          basemap: eSat
+        });
+        const view = new MapView({
+          container: "map",
+          map: map,
+          center: [-100, 30],
+          zoom: 3
+        });
+
+        const geometryInputEsriJson = document.getElementById("geometry-esriJson");
+        const geometryInputGeoJson = document.getElementById("geometry-geoJson");
+        const geometryInputWkt = document.getElementById("geometry-wkt");
+
+        draw = new Draw({view: view});
+        createTextareaBindings();
+
+        // loop through all buttons, connect onClick event
+        // listeners for buttons to activate drawing tools
+        var buttonsNL = document.querySelectorAll("button");
+        for (var i = 0; i < buttonsNL.length; ++i) {
+          var button = buttonsNL[i];
+          button.addEventListener("click", activateTool);
+        }
+
+        function activateTool(evt) {
+          view.graphics.removeAll();
+          currentDrawActionName = evt.target.id.toUpperCase().replace(/ /g, "_").toLowerCase();
+          currentDrawAction = draw.create(currentDrawActionName);
+          view.focus();
+
+          currentDrawAction.on(
+            [
+              "vertex-add",
+              "vertex-remove",
+              "cursor-update",
+              "redo",
+              "undo",
+              "draw-complete"
+            ],
+            addToMap
+          );
+        }
+
+        function addToMap(event) {
+          
+          const currentGeometry = getCurrentGeometry(event.vertices);
+          displayGeometryOnMap(currentGeometry);
+        }
+
+        function displayGeometryOnMap(geometry) {
+          view.graphics.removeAll();
+
+          const graphic = new Graphic({
+            geometry: geometry,
+            symbol: getCurrentSymbol()
+          });
+
+          view.graphics.add(graphic);
+
+          setGeometryTextAreas(geometry);
+        }
+
+        function getCurrentGeometry(vertices) {
+          let geometry = {
+            type: currentDrawActionName,
+            spatialReference: view.spatialReference
+          };
+          if (currentDrawActionName === "point") {
+            Object.assign(geometry, {
+              x: vertices[0][0],
+              y: vertices[0][1]
+            });
+            geometry = Point.fromJSON(geometry);
+          }
+          else if (currentDrawActionName === "multipoint") {
+            Object.assign(geometry, {
+              points: vertices
+            });
+            geometry = Multipoint.fromJSON(geometry);
+          }
+          else if (currentDrawActionName ==="polyline") {
+            Object.assign(geometry, {
+              paths: vertices
+            });
+            geometry = Polyline.fromJSON(geometry);
+          }
+          else if (currentDrawActionName === "polygon") {
+            Object.assign(geometry, {
+              rings: vertices
+            });
+            geometry = Polygon.fromJSON(geometry);
+          }
+          return WebMercatorUtils.webMercatorToGeographic(geometry);
+        }
+
+        function getCurrentSymbol() {
+          let symbol = {
+            color: [4, 90, 141],
+            width: 4
+          };
+          switch (currentDrawActionName) {
+            case "point":
+            case "multipoint":
+              Object.assign(symbol, {type: "simple-marker"});
+              break;
+            case "polyline":
+              Object.assign(symbol, {
+                type: "simple-line",
+                cap: "round",
+                join: "round"
+              });
+              break;
+            case "polygon":
+              Object.assign(symbol, {
+                type: "simple-fill",
+                color: [4, 90, 141, 0.25],
+                outline: {
+                  color: [4, 90, 141],
+                  width: 4
+                }
+              });
+              break;
+          }
+          return symbol;
+        }
+
+        function setGeometryTextAreas(geometry) {
+          const geojson = arcgisToGeoJSON(geometry);
+          const wkt = geojsonToWKT(geojson);
+
+          geometryInputEsriJson.value = JSON.stringify(geometry, null, '  ');
+          geometryInputGeoJson.value = JSON.stringify(geojson, null, '  ');
+          geometryInputWkt.value = wkt;
+          resetInputClass();
+        }
+
+        function createTextareaBindings() {
+          geometryInputEsriJson.addEventListener("change", updateMapFromEsriJsonInput);
+          geometryInputGeoJson.addEventListener("change", updateMapFromGeoJsonInput);
+          geometryInputWkt.addEventListener("change", updateMapFromWktInput);
+        }
+
+        function updateMapFromEsriJsonInput(evt) {
+          try {
+            // generate arcgis geometry object
+            var geometryText = geometryInputEsriJson.value;
+            var geometryJson = JSON.parse(geometryText);
+            var geometry = jsonUtils.fromJSON(geometryJson);
+            displayGeometryOnMap(geometry);
+            setGeometryTextAreas(geometry);
+          } catch (err) {
+            geometryInputEsriJson.classList.add("is-invalid");
+          }
+        }
+
+        function updateMapFromGeoJsonInput(evt) {
+          try {
+            // generate arcgis geometry object
+            var geometryText = geometryInputGeoJson.value;
+            var geometryJson = JSON.parse(geometryText);
+            var esriJson = geojsonToArcGIS(geometryJson);
+            var geometry = jsonUtils.fromJSON(esriJson);
+            displayGeometryOnMap(geometry);
+            setGeometryTextAreas(geometry);
+          } catch (err) {
+            geometryInputGeoJson.classList.add("is-invalid");
+          }
+        }
+
+        function updateMapFromWktInput(evt) {
+          try {
+            // generate arcgis geometry object
+            var geometryText = geometryInputWkt.value;
+            var geoJson = wktToGeoJSON(geometryText);
+            var esriJson = geojsonToArcGIS(geoJson);
+            var geometry = jsonUtils.fromJSON(esriJson);
+            displayGeometryOnMap(geometry);
+            setGeometryTextAreas(geometry);
+          } catch (err) {
+            geometryInputWkt.classList.add("is-invalid");
+          }
+        }
+
+        function resetInputClass() {
+          geometryInputEsriJson.classList.remove("is-invalid");
+          geometryInputGeoJson.classList.remove("is-invalid");
+          geometryInputWkt.classList.remove("is-invalid");
+        }
+
+      });
+    </script>
+  </head>
+  <body>
+    <div id="info-panel">
+      <div>
+        <h3 class="text-muted">Selectionner la zone a surveiller</h3>
+        <button id="point" type="button" class="btn btn-default">Point</button>
+        <button id="multipoint" type="button" class="btn btn-default">Pointillé</button>
+        <button id="polyline" type="button" class="btn btn-default">Multiligne</button>
+        <button id="polygon" type="button" class="btn btn-default">Polygone</button>
+      </div>
+      <div id="geometry-container">
+        <h3 class="text-muted">Ou coller/modifier</h3>
+        <h4 class="control-label text-muted" for="geometry-esriJson">FreeWorld</h4>
+        <textarea id="geometry-esriJson" class="form-control geometry-text form-control" rows=5></textarea>
+        <h4 class="control-label text-muted" for="geometry-geoJson">FreeWord</h4>
+        <textarea id="geometry-geoJson" class="form-control geometry-text form-control" rows=5></textarea>
+        <h4 class="control-label text-muted" for="geometry-wkt">wkt</h4>
+        <textarea id="geometry-wkt" class="form-control geometry-text form-control" rows=5></textarea>
+      </div>
+
+      <a class="btn btn-success" href="../../statistiques.html">Surveiller</a>
+    </div>
+
+    <div id="map" style="position:relative; bottom:40vh;"></div>
+  </body>
+  <style>
+     
+@media only screen and (max-width: 400px) {
+   #info-panel{
+    position: relative;
+    bottom: 40vh;
+
+   }
+}
+
+@media only screen and (max-width: 800px) {
+  #map{
+    position: relative;
+    bottom: 80vh;
+  }
+}
+
+
+  </style>
+</html>
